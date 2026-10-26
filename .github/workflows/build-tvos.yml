@@ -27,7 +27,9 @@ jobs:
 
       - name: Unpack prepared MISH sources
         working-directory: .
-        run: unzip -q MISH-GitHub-ready.zip -d source
+        run: |
+          unzip -q MISH-GitHub-ready.zip -d source
+          patch -d source -p1 < ui-refinements.patch
 
       - name: Prepare XcodeGen and record tools
         shell: bash
@@ -49,6 +51,18 @@ jobs:
       - name: Check build helpers
         run: python3 -m unittest discover -s scripts/tests -v
 
+      - name: Start real media server for client integration test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/preview-media/Movies
+          cp verified-samples/input-64x36.mp4 artifacts/preview-media/Movies/Test-film.mp4
+          printf 'mish-preview-test-token' > artifacts/preview-token.txt
+          python3 -u Windows_Server/server.py --media artifacts/preview-media --output artifacts/preview-output --token-file artifacts/preview-token.txt --port 8765 > artifacts/preview-server.log 2>&1 &
+          echo $! > artifacts/preview-server.pid
+          sleep 3
+          python3 -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8765/api/status?token=mish-preview-test-token").read().decode())'
+
       - name: Run tvOS client tests
         shell: bash
         run: |
@@ -67,13 +81,6 @@ jobs:
         run: |
           set -euo pipefail
           simulator_id=$(python3 scripts/select-tvos-simulator.py artifacts/simulators.json)
-          mkdir -p artifacts/preview-media/Movies
-          cp verified-samples/input-64x36.mp4 artifacts/preview-media/Movies/Test-film.mp4
-          printf 'mish-preview-test-token' > artifacts/preview-token.txt
-          python3 Windows_Server/server.py --media artifacts/preview-media --output artifacts/preview-output --token-file artifacts/preview-token.txt --port 8765 > artifacts/preview-server.log 2>&1 &
-          server_pid=$!
-          trap 'kill $server_pid || true' EXIT
-          sleep 3
           xcrun simctl terminate "$simulator_id" com.mish.ultravision || true
           xcrun simctl launch "$simulator_id" com.mish.ultravision --mish-preview http://127.0.0.1:8765 mish-preview-test-token
           sleep 5
@@ -129,7 +136,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Unpack sources
-        run: unzip -q MISH-GitHub-ready.zip -d source
+        run: |
+          unzip -q MISH-GitHub-ready.zip -d source
+          patch -d source -p1 < ui-refinements.patch
       - name: Install real media tools
         run: |
           sudo apt-get update -qq
