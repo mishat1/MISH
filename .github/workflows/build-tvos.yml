@@ -1,0 +1,100 @@
+name: Build MISH tvOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mish-tvos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: source
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Get source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Unpack prepared MISH sources
+        working-directory: .
+        run: unzip -q MISH-GitHub-ready.zip -d source
+
+      - name: Prepare XcodeGen and record tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          xcodebuild -version | tee artifacts/xcode-version.txt
+          xcodebuild -showsdks > artifacts/sdks.txt
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen --version | tee artifacts/xcodegen-version.txt
+          xcrun simctl list devices available --json > artifacts/simulators.json
+
+      - name: Generate Xcode project
+        working-directory: source/tvOS
+        run: xcodegen generate
+
+      - name: Check build helpers
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Run tvOS client tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_id=$(python3 scripts/select-tvos-simulator.py artifacts/simulators.json)
+          xcrun simctl boot "$simulator_id" || xcrun simctl bootstatus "$simulator_id" -b
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild -project tvOS/MISHUltraVision.xcodeproj -scheme MISHUltraVision \
+            -destination "platform=tvOS Simulator,id=$simulator_id" \
+            -derivedDataPath tvOS/build-simulator \
+            -resultBundlePath artifacts/tvos-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee artifacts/test.log
+
+      - name: Build and validate unsigned device IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tvOS/build-unsigned.sh 2>&1 | tee artifacts/build.log
+          cp tvOS/build/MISHUltraVision-UNSIGNED.ipa artifacts/
+          python3 scripts/validate-ipa.py artifacts/MISHUltraVision-UNSIGNED.ipa \
+            > artifacts/ipa-validation.json
+          shasum -a 256 artifacts/MISHUltraVision-UNSIGNED.ipa > artifacts/SHA256SUMS.txt
+
+      - name: Upload IPA after successful tests and validation
+        uses: actions/upload-artifact@v7
+        with:
+          name: MISH-tvOS-UNSIGNED-IPA
+          path: |
+            source/artifacts/MISHUltraVision-UNSIGNED.ipa
+            source/artifacts/ipa-validation.json
+            source/artifacts/SHA256SUMS.txt
+            source/artifacts/xcode-version.txt
+            source/artifacts/xcodegen-version.txt
+            source/artifacts/sdks.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Save diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: MISH-build-diagnostics
+          path: |
+            source/artifacts/*.log
+            source/artifacts/*.txt
+            source/artifacts/simulators.json
+            source/artifacts/tvos-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
