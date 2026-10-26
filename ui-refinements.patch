@@ -1,0 +1,55 @@
+--- a/tvOS/ContentView.swift
++++ b/tvOS/ContentView.swift
+@@ -18,6 +18,7 @@
+     @State private var selected: MediaFile?
+     @State private var stream = ""
+     @State private var playing: PlayableURL?
++    @State private var showConnection = false
+     @AppStorage("favoriteMedia") private var favoritesJSON = "[]"
+     @State private var onlyFavorites = false
+ 
+@@ -41,10 +42,10 @@
+             folderView.tabItem { Label("Папки", systemImage: "folder") }.tag(2)
+             sourcesView.tabItem { Label("Источники", systemImage: "square.stack.3d.up") }.tag(3)
+             jobsView.tabItem { Label("Обработка", systemImage: "sparkles") }.tag(4)
+-            connection.tabItem { Label("Компьютер", systemImage: "desktopcomputer") }.tag(5)
+         }
+         .tint(MISHTheme.mint)
+         .preferredColorScheme(.dark)
++        .sheet(isPresented: $showConnection) { connection }
+         .sheet(item: $selected) { file in
+             MediaDetail(file: file, client: client, isFavorite: favorites.contains(file.id),
+                 toggleFavorite: { toggleFavorite(file.id) })
+@@ -90,7 +91,7 @@
+                 HStack {
+                     Text("Начните с подключения Windows-сервера").font(.headline)
+                     Spacer()
+-                    Button("Подключить компьютер") { tab = 5 }
++                    Button("Подключить компьютер") { showConnection = true }
+                 }.padding(28).background(MISHTheme.panel, in: RoundedRectangle(cornerRadius: 20))
+             }
+         }
+@@ -152,6 +153,7 @@
+     private var sourcesView: some View {
+         page {
+             sectionHeader("Откуда приходит кино", subtitle: "Ваш компьютер, выбранные каталоги и прямые видеопотоки")
++            Button(client.connected ? "Настройки подключения к компьютеру" : "Подключить компьютер") { showConnection = true }
+             ForEach(client.sources) { item in
+                 Button { source = item.id; folder = nil; tab = 1 } label: {
+                     HStack(spacing: 24) {
+--- a/tvOS/Tests/ClientTests.swift
++++ b/tvOS/Tests/ClientTests.swift
+@@ -37,4 +37,13 @@
+         XCTAssertEqual(file.folderName, "Фильмы")
+         XCTAssertEqual(file.sourceID, "library")
+     }
++    func testServerRoundTrip() async throws {
++        let client = ServerClient()
++        client.address = "http://127.0.0.1:8765"
++        client.token = "mish-preview-test-token"
++        await client.connect()
++        XCTAssertTrue(client.connected, "Server connection failed: \(client.message)")
++        XCTAssertTrue(client.files.contains { $0.folderName == "Movies" }, "Expected real test media from the Windows-compatible HTTP server")
++        XCTAssertFalse(client.sources.isEmpty)
++    }
+ }
